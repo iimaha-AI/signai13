@@ -14,9 +14,23 @@ class BaseConfig:
     SESSION_COOKIE_SAMESITE = "Lax"
     MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH", str(16 * 1024 * 1024)))
 
-    # ── SQLite Database Configuration ──────────────────────────────
-    # اسم ملف قاعدة البيانات (سيتم إنشاؤه تلقائياً)
-    DB_PATH = os.environ.get("DB_PATH", "site.db")
+    # ── PostgreSQL Database Configuration ────────────────────────────────
+    # Read the full connection string from DATABASE_URL.
+    # Example: postgresql://user:password@host:5432/dbname?sslmode=require
+    DATABASE_URL = os.environ.get("DATABASE_URL")
+
+    # Back-compat: allow legacy DB_* variables to construct a URL if
+    # DATABASE_URL is not provided directly.
+    if not DATABASE_URL:
+        _db_user = os.environ.get("DB_USER")
+        _db_pw = os.environ.get("DB_PASSWORD")
+        _db_host = os.environ.get("DB_HOST")
+        _db_port = os.environ.get("DB_PORT", "5432")
+        _db_name = os.environ.get("DB_NAME")
+        if _db_user and _db_host and _db_name:
+            DATABASE_URL = (
+                f"postgresql://{_db_user}:{_db_pw or ''}@{_db_host}:{_db_port}/{_db_name}"
+            )
 
     MODEL_PATH = os.environ.get("MODEL_PATH", "models/sign_language_model.h5")
     CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.70"))
@@ -35,15 +49,24 @@ class DevelopmentConfig(BaseConfig):
 class ProductionConfig(BaseConfig):
     DEBUG = False
     TESTING = False
-    SESSION_COOKIE_SECURE = True
+    # On Hugging Face Spaces the app is served behind HTTPS, so secure cookies are safe.
+    SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "true").lower() == "true"
 
     def __init__(self):
         secret = os.environ.get("SECRET_KEY")
         if not secret or secret == "dev-secret-change-in-prod":
-            raise RuntimeError(
-                "ProductionConfig requires SECRET_KEY to be set via environment variable "
-                "to a strong random value. Never use the default dev key in production."
+            # Auto-generate one so the app can still boot in free hosting
+            # environments where the user forgot to set it. Log a warning.
+            import logging
+            import secrets as _secrets
+            logging.getLogger(__name__).warning(
+                "SECRET_KEY not set — generated an ephemeral one. "
+                "Set SECRET_KEY env var for stable sessions."
             )
+            self.SECRET_KEY = _secrets.token_hex(32)
+        else:
+            self.SECRET_KEY = secret
+
 
 class TestingConfig(BaseConfig):
     DEBUG = True
@@ -62,7 +85,4 @@ CONFIG_MAP = {
 def get_config():
     env = os.environ.get("FLASK_ENV", "development").lower()
     cls = CONFIG_MAP.get(env, DevelopmentConfig)
-    if cls is ProductionConfig:
-        obj = cls()
-        return obj
     return cls()
