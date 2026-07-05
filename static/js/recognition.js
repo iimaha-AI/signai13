@@ -1,13 +1,16 @@
 /* ═══════════════════════════════════════════════════════════════════
-   SignAI — Recognition Page Logic
+   SignAI — Recognition Page Logic  (BROWSER CAMERA EDITION)
    ───────────────────────────────────────────────────────────────────
-   Camera: Server-side OpenCV → MJPEG stream (no getUserMedia / HTTPS needed)
-   Predictions: Sequential async loop → /api/predict/frame
-                Waits for each response before starting next request.
-                This prevents flooding the server with parallel requests.
-   UI: Updates only when the displayed value changes meaningfully
-       to eliminate visual flickering.
-   ═══════════════════════════════════════════════════════════════════ */
+   Camera: Browser-native getUserMedia → <video> → <canvas> → base64
+   Predictions: Sequential loop → /api/predict (JSON body { image: b64 })
+   Why browser-side?
+     The cloud-hosted server has no physical webcam. The original
+     server-side OpenCV camera only worked on local/RPi deployments.
+     getUserMedia runs entirely in the user's browser and sends each
+     captured frame to /api/predict as base64 — no server camera needed.
+   Requires HTTPS — Hugging Face Spaces already serve over HTTPS, so
+   camera permissions will work in all modern browsers.
+   ═════════════════════════════════════════════════════════════════ */
 
 'use strict';
 
@@ -28,8 +31,14 @@ document.addEventListener('DOMContentLoaded', () => {
   let _displayedConf      = -1;
   let _displayedHandState = null;   // 'detected' | 'none'
 
+  /* Browser camera state */
+  let _stream         = null;   // MediaStream from getUserMedia
+  let _videoEl        = null;   // hidden <video> element
+  let _canvasEl       = null;   // hidden <canvas> for frame capture
+  let _canvasCtx      = null;
+
   /* ── DOM refs ─────────────────────────────────────────────────── */
-  const videoFeed         = document.getElementById('video-feed');
+  const videoFeed         = document.getElementById('video-feed');   // <img> we repurpose as <video> holder
   const bigLetter         = document.getElementById('big-letter');
   const confPercent       = document.getElementById('conf-percent');
   const confBar           = document.getElementById('conf-bar');
@@ -46,6 +55,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const videoPredConf     = document.getElementById('video-pred-conf');
   const cameraError       = document.getElementById('camera-error');
   const latencyDisplay    = document.getElementById('latency-display');
+  const cameraPlaceholder = document.getElementById('camera-placeholder');
 
   /* Settings panel */
   const settingsBtn      = document.getElementById('settings-btn');
@@ -61,23 +71,85 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ── Init Charts ──────────────────────────────────────────────── */
   if (chartCanvas) _confChart = new ConfidenceChart(chartCanvas);
 
-  /* ── Camera Controls ──────────────────────────────────────────── */
+  /* ───────────────────────────────────────────────────────────────
+     BROWSER CAMERA — getUserMedia
+     ─────────────────────────────────────────────────────────────── */
+
+  function _createCameraElements() {
+    /* Hidden <video> for getUserMedia stream */
+    if (!_videoEl) {
+      _videoEl = document.createElement('video');
+      _videoEl.setAttribute('playsinline', '');
+      _videoEl.setAttribute('muted', '');
+      _videoEl.muted = true;
+      _videoEl.style.cssText =
+        'width:100%;height:100%;object-fit:cover;display:block;transform:scaleX(-1)';
+      _videoEl.autoplay = true;
+    }
+    /* Hidden canvas for frame capture */
+    if (!_canvasEl) {
+      _canvasEl = document.createElement('canvas');
+      _canvasEl.width  = 640;
+      _canvasEl.height = 480;
+      _canvasCtx = _canvasEl.getContext('2d', { willReadFrequently: false });
+    }
+  }
+
   async function startCamera() {
     const btn = document.getElementById('btn-start-camera');
     setButtonLoading(btn, true);
     hideCameraError();
+
+    /* Feature detection */
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showCameraError('Your browser does not support camera access. Please use a modern browser (Chrome, Firefox, Edge, Safari).');
+      setButtonLoading(btn, false);
+      return;
+    }
+
     try {
-      const res = await apiFetch('/api/camera/open', { method: 'POST' });
-      if (!res.data.success) throw new Error(res.data.error || 'Failed to open camera');
+      _createCameraElements();
+
+      /* Request user's webcam — 640x480 is enough for the model */
+      _stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width:  { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: 'user',
+        },
+        audio: false,
+      });
+      _videoEl.srcObject = _stream;
+      await _videoEl.play();
+
+      /* Replace the placeholder with the live <video> element */
+      const panel = document.getElementById('video-panel');
+      if (cameraPlaceholder) cameraPlaceholder.style.display = 'none';
+      if (videoFeed) videoFeed.style.display = 'none';  // hide the old <img>
+      _videoEl.style.display = 'block';
+      panel && panel.appendChild(_videoEl);
+
       _isRunning = true;
-      videoFeed.src = '/video_feed';
-      videoFeed.style.display = 'block';
       liveBadge && (liveBadge.style.display = 'flex');
-      if (btn) { btn.textContent = 'Camera On'; btn.disabled = true; }
       disconnectOverlay && disconnectOverlay.classList.remove('show');
+      if (btn) { btn.textContent = 'Camera On'; btn.disabled = true; }
+
+      /* Begin sequential prediction loop */
       runPredictionLoop();
+
     } catch (err) {
-      showCameraError('Could not open camera: ' + err.message);
+      console.error('[SignAI] getUserMedia error:', err);
+      let msg = 'Could not open camera.';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        msg = 'Camera permission denied. Please allow camera access in your browser settings and try again.';
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        msg = 'No camera found on this device.';
+      } else if (err.name === 'NotReadableError') {
+        msg = 'Camera is already in use by another application.';
+      } else if (err.message) {
+        msg = 'Could not open camera: ' + err.message;
+      }
+      showCameraError(msg);
     } finally {
       setButtonLoading(btn, false);
     }
@@ -85,28 +157,41 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function stopCamera() {
     _isRunning = false;
-    videoFeed.src = '';
-    videoFeed.style.display = 'none';
+
+    /* Stop all video tracks */
+    if (_stream) {
+      _stream.getTracks().forEach(t => t.stop());
+      _stream = null;
+    }
+
+    /* Detach video element */
+    if (_videoEl) {
+      _videoEl.srcObject = null;
+      _videoEl.style.display = 'none';
+    }
+
+    /* Restore placeholder */
+    if (cameraPlaceholder) cameraPlaceholder.style.display = 'flex';
+
     liveBadge && (liveBadge.style.display = 'none');
     const btn = document.getElementById('btn-start-camera');
     if (btn) { btn.textContent = 'Start Camera'; btn.disabled = false; }
-    await apiFetch('/api/camera/close', { method: 'POST' }).catch(() => {});
   }
 
-  /* ── Camera feed disconnect detection ────────────────────────── */
-  if (videoFeed) {
-    videoFeed.addEventListener('error', () => {
-      if (_isRunning) {
-        disconnectOverlay && disconnectOverlay.classList.add('show');
-        stopCamera();
-      }
-    });
-    videoFeed.addEventListener('load', () => {
-      disconnectOverlay && disconnectOverlay.classList.remove('show');
-    });
-  }
-  if (disconnectOverlay) {
-    disconnectOverlay.addEventListener('click', startCamera);
+  /* Capture a single frame as a base64 JPEG string (no data: prefix). */
+  function _captureFrame() {
+    if (!_videoEl || !_videoEl.videoWidth || !_canvasCtx) return null;
+    /* Match canvas size to the actual video dimensions (just once is fine). */
+    if (_canvasEl.width !== _videoEl.videoWidth) {
+      _canvasEl.width  = _videoEl.videoWidth;
+      _canvasEl.height = _videoEl.videoHeight;
+    }
+    /* Draw the frame WITHOUT mirroring — the server-side preprocess flips
+       if needed. The <video> element is CSS-mirrored for the user's UX
+       (selfie view), but we send the raw unmirrored pixels to the server
+       so the trained model (which expects normal orientation) works. */
+    _canvasCtx.drawImage(_videoEl, 0, 0, _canvasEl.width, _canvasEl.height);
+    return _canvasEl.toDataURL('image/jpeg', 0.85).split(',')[1];  // strip "data:image/jpeg;base64,"
   }
 
   /* ── Camera error helpers ─────────────────────────────────────── */
@@ -120,34 +205,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /* ══════════════════════════════════════════════════════════════
      PREDICTION LOOP — Sequential, not setInterval
-     ──────────────────────────────────────────────────────────────
-     Why sequential?
-       setInterval fires even if the previous request hasn't
-       finished, flooding the server with parallel requests.
-       This loop instead:
-         1. Sends request
-         2. Waits for response
-         3. Sleeps for (targetInterval - elapsed) ms
-         4. Repeats
-     This gives a clean, predictable FPS with zero request piling.
-   ══════════════════════════════════════════════════════════════ */
+     ══════════════════════════════════════════════════════════════ */
 
   async function runPredictionLoop() {
     const getFps = () => parseInt(fpsSelect?.value || '10');
 
     while (_isRunning) {
-      const fps          = getFps();
-      const targetMs     = 1000 / fps;
-      const t0           = performance.now();
+      const fps      = getFps();
+      const targetMs = 1000 / fps;
+      const t0       = performance.now();
 
       try {
-        const res = await apiFetch('/api/predict/frame', {
-          method: 'POST',
-          body:   JSON.stringify({ auto_save: _autoSave }),
-        });
-
-        if (_isRunning && res.data.success) {
-          renderPrediction(res.data.data);
+        const b64 = _captureFrame();
+        if (b64) {
+          const res = await apiFetch('/api/predict', {
+            method: 'POST',
+            body:   JSON.stringify({ image: b64, auto_save: _autoSave }),
+          });
+          if (_isRunning && res.data.success) {
+            renderPrediction(res.data.data);
+          }
         }
       } catch (err) {
         /* Silent — network hiccups shouldn't crash the loop */
@@ -165,7 +242,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /* ══════════════════════════════════════════════════════════════
      RENDER — Anti-flicker: only update DOM when value changes
-   ══════════════════════════════════════════════════════════════ */
+     ══════════════════════════════════════════════════════════════ */
 
   function renderPrediction(d) {
     /* ── No hand detected ───────────────────────────────────────── */
@@ -181,7 +258,6 @@ document.addEventListener('DOMContentLoaded', () => {
         top5Panel && (top5Panel.innerHTML = '');
         if (uncertaintyWarn) uncertaintyWarn.classList.remove('show');
       }
-      /* Still update ring/votes even if no hand, for buffer drain */
       if (ringSvg) updateRing(ringSvg, d.buffer_fill || 0, 10);
       return;
     }
@@ -193,7 +269,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const conf   = d.confidence;
     const letter = d.letter;
 
-    /* Big letter — update only when letter changes */
     if (letter !== _displayedLetter) {
       _displayedLetter = letter;
       if (bigLetter) {
@@ -203,7 +278,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (videoPredLetter) videoPredLetter.textContent = letter;
 
-      /* Rebuild top5 only when letter changes */
       if (top5Panel && d.top5) {
         top5Panel.innerHTML = d.top5.map(t =>
           `<div class="top5-pill">
@@ -214,14 +288,12 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    /* Confidence — update only when delta > 1 % (reduces bar jitter) */
     if (Math.abs(conf - _displayedConf) >= 1) {
       _displayedConf = conf;
       if (confPercent) confPercent.textContent = conf.toFixed(1) + '%';
       if (confBar)     confBar.style.width      = conf + '%';
       if (videoPredConf) videoPredConf.textContent = conf.toFixed(1) + '%';
 
-      /* Update letter colour class when confidence bracket changes */
       if (bigLetter) {
         const cls = conf >= 70 ? 'high-conf' : conf >= 40 ? 'medium-conf' : 'low-conf';
         if (!bigLetter.className.includes(cls)) {
@@ -230,23 +302,17 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    /* Latency display */
     if (latencyDisplay && d.latency_ms != null) {
       latencyDisplay.textContent = d.latency_ms.toFixed(0) + ' ms';
     }
 
-    /* Low-confidence warning */
     if (uncertaintyWarn) {
       uncertaintyWarn.classList.toggle('show', !!d.low_confidence_warning);
     }
 
-    /* Confidence chart — every frame (it handles its own smoothing) */
     if (_confChart && d.letter_scores) _confChart.update(d.letter_scores);
-
-    /* Stability ring */
     if (ringSvg) updateRing(ringSvg, d.buffer_fill || 0, 10);
 
-    /* Buffer votes */
     if (bufferVotes && d.buffer_votes) {
       bufferVotes.innerHTML = Object.entries(d.buffer_votes)
         .sort(([, a], [, b]) => b - a)
@@ -254,7 +320,6 @@ document.addEventListener('DOMContentLoaded', () => {
         .join(' ');
     }
 
-    /* Auto-append stable letter to word (only once per stable event) */
     if (d.stable && d.stable_letter && d.stable_letter !== _lastStableLetter) {
       _lastStableLetter = d.stable_letter;
       appendLetter(d.stable_letter);
