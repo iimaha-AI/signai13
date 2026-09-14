@@ -1,4 +1,83 @@
-# SignAI — Sign Alphabet Recognition and Learning
+# SignAI | Sign Alphabet Recognition & Learning
+
+A computer-vision web prototype that connects browser webcam capture to sign-alphabet predictions and learning pages. It brings TensorFlow inference, MediaPipe hand landmarks, and PostgreSQL-backed accounts/history into one Flask application.
+
+**Focus:** Computer Vision · Deep Learning · Web Integration · Data Persistence  
+**Scope:** 26 Latin-letter classes (A–Z). Alphabet recognition; continuous sign-language translation has not been validated.
+
+[Architecture](#architecture) · [Results](#results--validation) · [Run locally](#how-to-run--known-limitations) · [Limitations](#known-limitations)
+
+## Features
+
+- Browser-camera frames submitted to the prediction API.
+- Inference engine supporting 63-feature hand-landmark vectors and RGB CNN inputs.
+- Temporal prediction smoothing for more stable displayed letters.
+- Learning pages, authentication, and prediction history with PostgreSQL.
+- Training scripts and experiment metadata for landmark and image-based models.
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Web application | Python 3.11, Flask, HTML/CSS/JavaScript |
+| Vision & inference | TensorFlow/Keras, MediaPipe, OpenCV, NumPy |
+| Persistence | PostgreSQL, psycopg2 |
+| Packaging | Docker, Gunicorn |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Browser webcam] --> B[Flask /api/predict]
+    B --> C[Landmark or RGB preprocessing]
+    C --> D[TensorFlow model]
+    D --> E[Prediction smoothing]
+    E --> F[Learning interface]
+    B <--> G[PostgreSQL accounts and history]
+```
+
+[app.py](app.py) coordinates routes and authentication; [cnn_model.py](cnn_model.py) loads weights and runs inference; [config.py](config.py) manages configuration; [db_manager.py](db_manager.py) handles PostgreSQL. The engine detects model input shape and falls back to **demo mode** if loading fails. Check model status before interpreting displayed predictions as trained-model output.
+
+## Screenshots
+
+Camera and learning-page captures are not yet included. The following slots are ready for authentic screenshots:
+
+| Planned image | What it should show |
+| --- | --- |
+| `docs/screenshots/signai-camera.png` | Camera view, predicted letter, and real-model/demo status |
+| `docs/screenshots/signai-learning.png` | An existing alphabet learning page |
+
+<!-- Add images here only after capturing the real application and committing the files.
+![SignAI camera and model status](docs/screenshots/signai-camera.png)
+![SignAI learning page](docs/screenshots/signai-learning.png)
+-->
+
+## Results & validation
+
+**Recorded runtime verification — 2026-09-14:** five offline tests passed. The active H5 weights loaded as a landmark DNN with 63 input features and 26 outputs; a zero-input tensor produced finite values. This establishes loading/inference compatibility, not recognition accuracy. These are existing repository records, not a new run for this documentation update.
+
+| Experiment metadata | Recorded metric |
+| --- | --- |
+| [Landmark DNN](models/landmark_model_meta.json) | Validation accuracy: 99.66% |
+| [MobileNetV2](models/mobilenet_model_meta.json) | Validation accuracy: 99.9% |
+| [Custom CNN](models/custom_cnn_meta.json) | Test accuracy: 5.15% |
+| [Active model](models/model_meta.json) | Accuracy: not recorded (`null`) |
+
+These are separate experiments and splits, not a controlled comparison or reproduced benchmarks. The best experiment score cannot be assigned to the active weights without matching model provenance, data split, and preprocessing.
+
+
+## Contribution & attribution
+
+The implementation described above is visible in the repository. A personal contribution breakdown is not documented; individual roles are therefore left unspecified. Existing attribution and licensing notes are preserved below.
+
+## How to run & known limitations
+
+Expand the original documentation below for the complete setup commands, limitations, provenance notes, and recorded verification. Its content has been preserved; the presentation update above does not introduce new runtime or benchmark claims.
+
+<details>
+<summary>Setup, limitations, and existing technical documentation</summary>
+
+## SignAI — Sign Alphabet Recognition and Learning
 
 A Flask application combining browser webcam capture, sign-alphabet inference, PostgreSQL accounts/history, and learning pages. Model classes cover 26 Latin letters. This is an alphabet-recognition prototype, not a validated continuous sign-language translator.
 
@@ -85,3 +164,5 @@ Run `python -m unittest -v test_runtime` from the repository directory. Five off
 Model paths now resolve relative to the source, shell configuration takes precedence over `.env`, and legacy DB credentials are URL-escaped. Missing DATABASE_URL no longer aborts module import before the existing no-persistence branch can run. Accounts and persistence still require PostgreSQL. The original missing training script is not replaced with an unrelated training algorithm.
 
 MediaPipe requires `opencv-contrib-python`; requirements now select a single cv2 distribution. Start with a fresh virtual environment when upgrading from the old mixed OpenCV installation, as recommended by the [OpenCV package documentation](https://pypi.org/project/opencv-contrib-python/4.11.0.86/). Model files and recognition/training logic were not changed. Docker was inspected but not built in this Windows test environment. PostgreSQL login/history operations, real camera capture and training on the absent ASL dataset have not been verified.
+
+</details>
