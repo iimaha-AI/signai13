@@ -1,3 +1,5 @@
+> Historical review. Runtime repairs and current verification are documented in [README](../README.md), section Runtime repair — 2026-09-14.
+
 # Source review — 2026-09-13
 
 ## Strength

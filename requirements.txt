@@ -21,8 +21,9 @@ scikit-learn==1.4.0
 h5py==3.10.0
 
 # ── Computer Vision ────────────────────────────────────────
-# Use headless build for server environments (no GUI libs needed).
-opencv-python-headless==4.9.0.80
+# MediaPipe requires contrib. Use only one distribution providing the cv2 namespace.
+# Docker already installs the native libraries required by this build.
+opencv-contrib-python==4.11.0.86
 mediapipe==0.10.9
 Pillow==10.2.0
 

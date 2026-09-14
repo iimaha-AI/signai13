@@ -32,5 +32,5 @@ ENV PORT=7860
 ENV FLASK_ENV=production
 EXPOSE 7860
 
-# Run with gunicorn; 2 workers fit comfortably in 16GB RAM.
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:7860", "--timeout", "120", "app:app"]
+# One process owns the in-memory prediction buffers and camera manager.
+CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:7860", "--timeout", "120", "app:app"]

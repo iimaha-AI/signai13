@@ -12,9 +12,7 @@ import uuid
 from datetime import date, timedelta
 from functools import wraps
 
-# Load environment variables first
-from dotenv import load_dotenv
-load_dotenv(override=True)
+# Environment loading is centralized in config.py; shell values take precedence.
 
 from flask import (
     Flask, Response, jsonify, redirect, render_template,
@@ -1014,6 +1012,9 @@ def api_start_training():
     status_path = os.path.join(os.path.dirname(__file__), "models", "training_status.json")
     script_path = os.path.join(os.path.dirname(__file__), "fast_train.py")
 
+    if not os.path.isfile(script_path):
+        return _err("Training entry point fast_train.py is absent. Restore the original script; training was not started.", 503)
+
     # Check if training is already running
     if os.path.isfile(status_path):
         try:
@@ -1033,7 +1034,7 @@ def api_start_training():
                         "models", "train_stdout.log"), "w"),
             stderr=subprocess.STDOUT,
             start_new_session=True,
-            cwd=os.path.dirname(os.path.dirname(__file__)),
+            cwd=os.path.dirname(__file__),
         )
         # Write an initial status
         with open(status_path, "w") as f:

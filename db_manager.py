@@ -77,6 +77,9 @@ def _conn():
 
 def init_db() -> bool:
     """Create tables if they do not exist (idempotent)."""
+    if not _db_url:
+        # Allow the app's existing no-persistence startup branch to handle this.
+        return False
     try:
         with _conn() as conn:
             with conn.cursor() as cur:

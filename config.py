@@ -1,8 +1,12 @@
 import os
 from datetime import timedelta
 from dotenv import load_dotenv
+from pathlib import Path
+from urllib.parse import quote
 
-load_dotenv(override=True)
+BASE_DIR = Path(__file__).resolve().parent
+
+load_dotenv(BASE_DIR / ".env", override=False)
 
 
 class BaseConfig:
@@ -29,10 +33,10 @@ class BaseConfig:
         _db_name = os.environ.get("DB_NAME")
         if _db_user and _db_host and _db_name:
             DATABASE_URL = (
-                f"postgresql://{_db_user}:{_db_pw or ''}@{_db_host}:{_db_port}/{_db_name}"
+                f"postgresql://{quote(_db_user, safe='')}:{quote(_db_pw or '', safe='')}@{_db_host}:{_db_port}/{quote(_db_name, safe='')}"
             )
 
-    MODEL_PATH = os.environ.get("MODEL_PATH", "models/sign_language_model.h5")
+    MODEL_PATH = str(BASE_DIR / Path(os.environ.get("MODEL_PATH", "models/sign_language_model.h5")).expanduser())
     CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.70"))
     FRAME_RATE = int(os.environ.get("FRAME_RATE", "10"))
 
